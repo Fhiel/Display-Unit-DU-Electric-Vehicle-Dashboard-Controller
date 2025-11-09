@@ -1,0 +1,11 @@
+# MicroPython
+__pycache__/
+*.mpy
+*.uf2
+
+# MicroPico
+.vscode/microPico/
+
+# PlatformIO (falls mal reinkommt)
+.pio/
+platformio.ini
