@@ -4,7 +4,7 @@
 # Compatible with SSD1306_I2C, myfont.py (blit version), and main.py
 
 import utime
-From myfont import MyFont
+from myfont import MyFont
 
 # --- Global Display Objects (set in main.py) ---
 central = None
@@ -109,7 +109,7 @@ async def update_odometer_display(shared_data):
                 dirty_y0, dirty_y1 = Y_LARGE_FONT, 31
 
         elif mode == DISPLAY_MODE_TRIP:
-            X_TOTAL_START = 0
+            X_TRIP_START = 28
             X_UNIT_TOTAL = 97
 
             trip_val = shared_data.trip_km
@@ -117,17 +117,13 @@ async def update_odometer_display(shared_data):
             if shared_data.odo_dirty_flag or trip_str != shared_data.last_displayed_trip_str:
                 char_changed = True
                 odometer.text(trip_str, X_TRIP_START, Y_LARGE_FONT, 1, font=font_large)
-                # NEU: 16x21 Font für Trip-KM (5 Zeichen * 16px/Zeichen = 80px Breite)
-                odometer.text(trip_str, 28, Y_LARGE_FONT, 1, font=font_large)
                 
-                # KORREKTUR: Standard 8x8 Font für die Einheit
                 odometer.text("km", 97, 17)
                 
                 shared_data.last_displayed_trip_str = trip_str
                 dirty_x0, dirty_x1 = X_TRIP_START, 127
                 dirty_y0, dirty_y1 = Y_LARGE_FONT, 31
 
-        # Mode, der auf 12x16 bleibt (keine Aenderung noetig)
         elif mode == DISPLAY_MODE_TEMP:
             source_changed = (shared_data.temp_show != shared_data.last_displayed_temp_source)
             if shared_data.odo_dirty_flag or source_changed:
