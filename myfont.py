@@ -1,13 +1,13 @@
-# myfont.py
-# OPTIMIZED 12x16 Font – 10-bit data + 1-bit spacing
-# Uses framebuf.blit() → 1 I2C transfer per character!
+﻿# myfont.py
+# OPTIMIZED 12x16 Font â€“ 10-bit data + 1-bit spacing
+# Uses framebuf.blit() â†’ 1 I2C transfer per character!
 # Dirty-rect ready, async-safe, debug_print, low RAM
 
 from micropython import const
 import framebuf
 
-# --- Font Data: 16 bytes (not 16 ints!) → 50% less RAM ---
-# Each row = 12 bits → packed into 2 bytes (high + low)
+# --- Font Data: 16 bytes (not 16 ints!) â†’ 50% less RAM ---
+# Each row = 12 bits â†’ packed into 2 bytes (high + low)
 # Format: [byte0 (bits 11-4), byte1 (bits 3-0 + padding)]
 
 font_12x16_packed = {
@@ -86,7 +86,7 @@ def _get_char_buffer(char):
 
 def draw_12x16_font(oled, text, x, y, display_width, display_height, debug_print=None):
     """
-    FAST: Render 12x16 text using blit() → 1 I2C transfer per character
+    FAST: Render 12x16 text using blit() â†’ 1 I2C transfer per character
     """
     if oled is None or not text:
         return
@@ -117,8 +117,9 @@ def draw_12x16_font(oled, text, x, y, display_width, display_height, debug_print
     if min_x <= max_x and min_y <= max_y:
         try:
             oled.show(x0=min_x, y0=min_y, x1=max_x, y1=max_y)
-            debug(f"Font: Drew '{text}' at ({x},{y}) → dirty {min_x}-{max_x},{min_y}-{max_y}", level=3)
+            debug(f"Font: Drew '{text}' at ({x},{y}) â†’ dirty {min_x}-{max_x},{min_y}-{max_y}", level=3)
         except Exception as e:
             debug(f"Font: show() error: {e}", level=0)    'R': b'\xFF\xFF\x0F\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x18\x01\x00\x10\xFF\xFF\x10\xFF\xFF\x10\xFF\xFF\x10\x01\xE0\x10\x01\x80\x10\x01\x80\x1C\x01\x00\x16\x01\x00\x13\x01\x00\x11\x01\x00\x10\x01\x00\x10',
     'N': b'\xFE\xFF\x07\x02\x00\x04\x02\x00\x04\x06\x00\x04\x0E\x00\x04\x1E\x00\x04\x3E\x00\x04\x7E\x00\x04\xE6\x00\x04\xC6\x00\x04\x86\x00\x04\x06\x00\x04\x06\x00\x04\x06\x00\x06\x06\x00\x07\x06\x00\x03\x06\x00\x03\x06\x00\x01\x06\x00\x01',
     'D': b'\xFF\xFF\x0F\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x08\x01\x00\x18\x01\x00\x18\xFF\xFF\x1F\xFF\xFF\x0F\xFF\xFF\x07',
+
