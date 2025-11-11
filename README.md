@@ -9,7 +9,7 @@ The **Display Unit (DU)** is the central brain of an electric vehicle dashboard.
 | Feature | Item | Description | Tech |
 |-------|------|------|---|
 | **Analog Speedometer** | B | Smooth 0–225 km/h pointer via stepper motor | `#stepper-motor`, `FullStep`, `480 steps` |
-| **Analog Tachometer** | E | PWM signal (0–12,000 RPM) for external tachometer | `#pwm-output`, `rpm2.py` |
+| **Analog Tachometer** | E | PWM signal (0–12,000 RPM) for tachometer | `#pwm-output`, `rpm2.py` |
 | **Analog Temperature Gauge** | L | Motor or MCU temperature via PWM | `#temp-gauge`, `TempGauge` |
 | **3x SSD1306 OLED Displays** |  | I2C, async updates, Dirty-Rect optimization | `#oled`, `#ssd1306`, `#i2c` |
 | &nbsp;&nbsp;→ **Odometer Display** | A | Speed, total km, trip km, mode switch | `#odometer`, `#trip-counter` |
