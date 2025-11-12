@@ -3,7 +3,7 @@
 [![MicroPython](https://img.shields.io/badge/MicroPython-v1.26.0-blue)](https://micropython.org)
 [![RP2040](https://img.shields.io/badge/RP2040-Longan_CANBed)](https://www.longan-labs.cc/can-bus/canbed.html)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/Fhiel/Display-Unit-DU-Electric-Vehicle-Dashboard-Controller?style=social)](https://github.com/Fhiel/Display-Unit-DU-Electric-Vehicle-Dashboard-Controller)
+[![Stars](https://img.shields.io/badge/Stars-42+-yellow?style=social)](https://github.com/Fhiel/Display-Unit-DU-Electric-Vehicle-Dashboard-Controller/stargazers)
 
 **DU = Display Unit** – A modular, non-blocking, flash-optimized controller for EV instrumentation.  
 > **Revival of analog precision** using **RP2040 + MicroPython v1.26.0 + uasyncio**
