@@ -1,26 +1,37 @@
-# Display-Unit-DU-Electric-Vehicle-Dashboard-Controller
-The **Display Unit (DU)** is the central brain of an electric vehicle dashboard. It combines **analog precision** with **digital clarity** using a **Raspberry Pi Pico (RP2040)**, **MicroPython**, and **uasyncio**.  > **DU = Display Unit** – A modular, non-blocking, flash-optimized controller for EV instrumentation.
+# Display-Unit-DU-Electric-Vehicle-Dashboard-Controller  
+
+[![MicroPython](https://img.shields.io/badge/MicroPython-v1.26.0-blue)](https://micropython.org)
+[![RP2040](https://img.shields.io/badge/RP2040-Longan_CANBed)](https://www.longan-labs.cc/can-bus/canbed.html)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/Fhiel/Display-Unit-DU-Electric-Vehicle-Dashboard-Controller?style=social)](https://github.com/Fhiel/Display-Unit-DU-Electric-Vehicle-Dashboard-Controller)
+
+**DU = Display Unit** – A modular, non-blocking, flash-optimized controller for EV instrumentation.  
+> **Revival of analog precision** using **RP2040 + MicroPython v1.26.0 + uasyncio**
+
+![Dashboard](https://github.com/user-attachments/assets/553f2069-2237-4c77-9480-28c75b683de4)
+
+## Why this project exists
+In classic cars, instruments were driven by cables or sensors. After EV conversion? **All gone.**  
+This project brings back the **original look** – but smarter, smoother, and fully digital under the hood.
+
+**No direct CANbus** (yet) – we use a pre-processed RS485 telemetry stream.  
+Why? **RP2040 + MicroPython** are fast enough for 20 Hz pointers and 12 async tasks – but not for full CAN parsing.  
+**Future v2**: Native CANbus with CircuitPython or Rust.
 
 ---
 
-## Core Features
-<img width="1573" height="402" alt="dashboard_5" src="https://github.com/user-attachments/assets/553f2069-2237-4c77-9480-28c75b683de4" />
+## Core Features (v1.0 – MicroPython 1.26.0)
 
 | Feature | Item | Description | Tech |
 |-------|------|------|---|
-| **Analog Speedometer** | B | Smooth 0–225 km/h pointer via stepper motor | `#stepper-motor`, `FullStep`, `480 steps` |
-| **Analog Tachometer** | E | PWM signal (0–12,000 RPM) for tachometer | `#pwm-output`, `rpm2.py` |
-| **Analog Temperature Gauge** | L | Motor or MCU temperature via PWM | `#temp-gauge`, `TempGauge` |
-| **3x SSD1306 OLED Displays** |  | I2C, async updates, Dirty-Rect optimization | `#oled`, `#ssd1306`, `#i2c` |
-| &nbsp;&nbsp;→ **Odometer Display** | A | Speed, total km, trip km, mode switch | `#odometer`, `#trip-counter` |
-| &nbsp;&nbsp;→ **Central Display** | S | Motor temp, MCU temp, ISO-R, boot animation, diagnostic stack | `#telemetry`, `#iso-r`, `#diagnostics` |
-| &nbsp;&nbsp;→ **RND Display** | H | Gear (R/N/D), inverted in reverse | `#gear-display`, `#reverse-indicator` |
-| **Button Control** | C | Short/long press: mode, reset, contrast, zero | `#button-input`, `#ui-control` |
-| **RS485 Transceiver** |  | Receives **pre-processed CAN extract** via custom protocol over RS485 | `#rs485`, `#serial-telemetry`, `#custom-protocol` |
-| **Persistent Odometer** |  | Saves total/trip km after 2s stop, LittleFS | `#non-volatile`, `#littlefs`, `store_km.py` |
-| **Async Architecture** |  | 12 independent tasks, 20 Hz pointer, 1 Hz displays | `#uasyncio`, `#real-time`, `#multitasking` |
-| **Watchdog + GC** |  | Hardware WDT (5s), memory monitoring | `#watchdog`, `#gc`, `#stability` |
-
+| **Analog Speedometer** | B | 480-step precision, 20 Hz update | `#stepper-motor`, `FullStep` |
+| **Analog Tachometer** | E | 0–12,000 RPM via PWM | `#pwm-output`, `rpm2.py` |
+| **Temperature Gauges** | L | Motor + MCU temp | `#temp-gauge` |
+| **3x SSD1306 OLED** | A/S/H | Async, dirty-rect, 1 Hz refresh | `#oled`, `#i2c`, `#uasyncio` |
+| **Persistent Odometer** | A | Survives power loss (LittleFS) | `#littlefs`, `store_km.py` |
+| **Button Matrix** | C | Short/long press, debounce | `#button-input` |
+| **RS485 Telemetry** | – | Custom protocol (115200 baud) | `#rs485`, `#serial` |
+| **Watchdog + GC** | – | 5s hardware WDT, auto-reboot on freeze | `#stability` |
 ---
 
 ## Hardware
