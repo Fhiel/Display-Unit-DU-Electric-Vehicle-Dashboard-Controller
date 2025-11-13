@@ -16,7 +16,6 @@ This project brings back the **original look** – but smarter, smoother, and fu
 
 **No direct CANbus** (yet) – we use a pre-processed RS485 telemetry stream.  
 Why? **RP2040 + MicroPython** are fast enough for 20 Hz pointers and 12 async tasks – but not for full CAN parsing.  
-**Future v2**: Native CANbus with CircuitPython or Rust.
 
 ---
 
