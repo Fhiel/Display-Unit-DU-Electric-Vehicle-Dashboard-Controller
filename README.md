@@ -1,4 +1,4 @@
-# Display-Unit-DU-Electric-Vehicle-Dashboard-Controller  
+# **Display-Unit-DU-Electric-Vehicle-Dashboard-Controller**
 
 [![MicroPython](https://img.shields.io/badge/MicroPython-v1.26.0-blue)](https://micropython.org)
 [![RP2040](https://img.shields.io/badge/RP2040-Longan_CANBed)](https://www.longan-labs.cc/can-bus/canbed.html)
@@ -137,9 +137,8 @@ graph LR
     class E4 OutputModule;
     class E5 OutputModule;
     class F2 OutputModule;
-
-
 ```
+
 # **Asynchronous Data Flow Architecture: Shared Telemetry Data (SD)**
 
 ## **1\. Overview and Core Principle**
