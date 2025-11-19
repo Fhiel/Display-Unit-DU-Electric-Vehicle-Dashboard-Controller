@@ -52,6 +52,7 @@ Why? **RP2040 + MicroPython** are fast enough for 20 Hz pointers and 12 async ta
 ## Asynchronous Task and Data Flow (main.py)
 
 The core architecture relies on the Shared Telemetry Data object, which acts as the central state store, enabling communication between the simultaneously running uasyncio tasks.
+---
 
 ```mermaid
 graph LR
@@ -137,6 +138,7 @@ graph LR
     class E4 OutputModule;
     class E5 OutputModule;
     class F2 OutputModule;
+
 ```
 
 # **Asynchronous Data Flow Architecture: Shared Telemetry Data (SD)**
