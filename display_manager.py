@@ -3,8 +3,21 @@
 # Optimized with Dirty-Rect, permanent subtext, async-safe, debug_print
 # Compatible with SSD1306_I2C, myfont.py (blit version), and main.py
 
-import utime
 from myfont import MyFont
+# import utime # removes, because of conflict with uasyncio?
+# --- Lazy utime import (to prevent  v1.26.0 Pico-Bug) ---
+
+def _get_ticks_ms():
+    import utime
+    return utime.ticks_ms()
+
+def _ticks_diff(now, then):
+    import utime
+    return utime.ticks_diff(now, then)
+# Code modififacition for the lazy import
+# utime.ticks_ms()        → _get_ticks_ms()
+# utime.ticks_diff(...)   → _ticks_diff(...)
+# -------------------------------------------------------
 
 # --- Global Display Objects (set in main.py) ---
 central = None
@@ -30,10 +43,6 @@ DISPLAY_MODE_TEMP = 3
 
 # --- Configuration ---
 CENTRAL_BOOT_DURATION_MS = 5000
-R_ISO_MIN = 0
-R_ISO_MAX = 50000
-R_ISO_WARNING = 400
-R_ISO_ERROR = 250
 
 # --- Central Subtext: Permanent labels (drawn once) ---
 _subtext_drawn = False  # Local flag: ensures subtext is drawn only once
@@ -62,8 +71,8 @@ async def update_odometer_display(shared_data):
     speed_str = f"{shared_data.digital_speed:>3}"
     km_str = f"{int(shared_data.total_km):06d}"
     
-    # NEW Y-COORDINATE for 21px high fonts: (32 - 21) // 2 = 5
-    Y_LARGE_FONT = 5
+    # NEW Y-COORDINATE for 24px high fonts: (32 - 24) // 2 = 4
+    Y_LARGE_FONT = 4
     
     # --- 3. Mode handling ---
     mode = shared_data.current_display_mode
@@ -84,7 +93,7 @@ async def update_odometer_display(shared_data):
     if shared_data.odo_dirty_flag:
         odometer.fill(0) # Full buffer clear (128x32)
         full_redraw_needed = True
-        shared_data.debug_print("Odometer: Full buffer clear due to mode/contrast change.", level=2)
+        shared_data.debug_print("Odometer: Full buffer clear due to mode/contrast change.")
 
     try:
         # Modes that use the 16x21 font
@@ -98,11 +107,11 @@ async def update_odometer_display(shared_data):
                 # If NO Full Redraw occurred (only text change), we must clear the old text.
                 if not full_redraw_needed:
                     # Only text change within the same mode: partial clearing
-                    odometer.fill_rect(X_SPEED_START, Y_LARGE_FONT, 128 - X_SPEED_START, 21, 0)
+                    odometer.fill_rect(X_SPEED_START, Y_LARGE_FONT, 128 - X_SPEED_START, 24, 0)
                     odometer.fill_rect(97, 19, 8 * 4, 8, 0) # Clear unit km/h
                     
                 font_large.text(speed_str, X_SPEED_START, Y_LARGE_FONT, 1, display=odometer)
-                odometer.text("km/h", 97, 19) 
+                odometer.text("km/h", 97, 21) 
                 
                 shared_data.last_displayed_speed_str = speed_str
                 
@@ -120,11 +129,11 @@ async def update_odometer_display(shared_data):
                     odometer.fill_rect(0, Y_LARGE_FONT, 128, 21, 0) # Clear large font area
                     odometer.fill_rect(97, 19, 8 * 2, 8, 0) # Clear unit km
                 
-                # NEW: 16x21 font for Total-KM (6 characters * 16px/char = 96px width)
+                # NEW: 16x24 font for Total-KM (6 characters * 16px/char = 96px width)
                 font_large.text(km_str, X_TOTAL_START, Y_LARGE_FONT, 1, display=odometer)
                 
                 # CORRECTION: Standard 8x8 font for the unit
-                odometer.text("km", 100, 19)
+                odometer.text("km", 100, 21)
                 
                 shared_data.last_displayed_km_str = km_str
                 
@@ -145,7 +154,7 @@ async def update_odometer_display(shared_data):
                     odometer.fill_rect(97, 19, 8 * 2, 8, 0) # Clear unit km
                 
                 font_large.text(trip_str, X_TRIP_START, Y_LARGE_FONT, 1, display=odometer)
-                odometer.text("km", 100, 19)
+                odometer.text("km", 100, 21)
                 
                 shared_data.last_displayed_trip_str = trip_str
                 
@@ -176,25 +185,25 @@ async def update_odometer_display(shared_data):
                 if full_redraw_needed:
                     # Full screen redraw (e.g. contrast or mode change)
                     odometer.show()
-                    shared_data.debug_print("Odometer: full screen update (mode/contrast)", level=2)
+                    # shared_data.debug_print("Odometer: full screen update (mode/contrast)")
                 else:
                     # Only update the affected text area (within the mode)
                     # Ensure coordinates are valid (Dirty Rect is only used when char_changed)
                     if dirty_x0 < dirty_x1 and dirty_y0 < dirty_y1:
                         odometer.show(dirty_x0, dirty_y0, dirty_x1, dirty_y1)
-                        shared_data.debug_print(f"Odometer: dirty rect ({dirty_x0},{dirty_y0},{dirty_x1},{dirty_y1})", level=3)
+                        # shared_data.debug_print(f"Odometer: dirty rect ({dirty_x0},{dirty_y0},{dirty_x1},{dirty_y1})", level=3)
                     else:
                         # Fallback for invalid Dirty Rect (should not happen)
                         odometer.show() 
-                        shared_data.debug_print("Odometer: dirty rect fallback to full show", level=3)
+                        shared_data.debug_print("Odometer: dirty rect fallback to full show")
 
                 shared_data.odo_dirty_flag = False # Set flag to False after successful show
             except OSError as e:
-                shared_data.debug_print(f"ERROR: I2C error in odometer.show(): {e}", level=0)
+                shared_data.debug_print(f"ERROR: I2C error in odometer.show(): {e}")
                 odometer = None
 
     except Exception as e:
-        shared_data.debug_print(f"ERROR in update_odometer_display: {e}", level=0)
+        shared_data.debug_print(f"ERROR in update_odometer_display: {e}")
 
 # === CENTRAL DISPLAY ===
 async def update_central_display(shared_data):
@@ -213,11 +222,11 @@ async def update_central_display(shared_data):
         shared_data.central_last_contrast = shared_data.current_contrast
         shared_data.central_dirty_flag = True
 
-    current_time = utime.ticks_ms()
+    current_time = _get_ticks_ms()
 
     # --- BOOT SEQUENCE ---
     if shared_data.central_boot_active:
-        if utime.ticks_diff(current_time, shared_data.central_ok_start_time) > CENTRAL_BOOT_DURATION_MS:
+        if _ticks_diff(current_time, shared_data.central_ok_start_time) > CENTRAL_BOOT_DURATION_MS:
             shared_data.central_boot_active = False
             shared_data.central_init_step = 0
             shared_data.central_dirty_flag = True
@@ -226,7 +235,7 @@ async def update_central_display(shared_data):
             shared_data.central_init_step = 1
             shared_data.central_dirty_flag = True
         elif shared_data.central_init_step == 1:
-            font_small.text(" BERTONE ", 0, 0, 1, display=central)
+            font_small.text("BERTONE", 22, 0, 1, display=central)
             shared_data.central_init_step = 2
             shared_data.central_dirty_flag = True
         elif shared_data.central_init_step == 2:
@@ -251,9 +260,9 @@ async def update_central_display(shared_data):
         # Show bottom row once
         try:
             central.show(0, 16, 127, 31)
-            shared_data.debug_print("Central: subtext drawn permanently", level=2)
+            #shared_data.debug_print("Central: subtext drawn permanently")
         except OSError as e:
-            shared_data.debug_print(f"ERROR: I2C error in central subtext show(): {e}", level=0)
+            shared_data.debug_print(f"ERROR: I2C error in central subtext show(): {e}")
 
     # --- Get telemetry ---
     telemetry = shared_data.internal_telemetry_data
@@ -288,9 +297,9 @@ async def update_central_display(shared_data):
         # Show only top row
         try:
             central.show(0, 0, 127, 15)
-            shared_data.debug_print("Central: top row updated", level=2)
+            # shared_data.debug_print("Central: top row updated")
         except OSError as e:
-            shared_data.debug_print(f"ERROR: I2C error in central.show(): {e}", level=0)
+            shared_data.debug_print(f"ERROR: I2C error in central.show(): {e}")
 
         shared_data.central_dirty_flag = False
 
@@ -307,21 +316,21 @@ async def update_rnd_display(shared_data):
         return
 
     # --- Geometry for 64x32 Display ---
-    # Desired box size: 20x29 pixels (contains the 16x21 font + 2px/4px margin)
+    # Desired box size: 20x30 pixels (contains the 16x24 font + 2px/4px margin)
     RND_BOX_WIDTH = 20
-    RND_BOX_HEIGHT = 29
+    RND_BOX_HEIGHT = 30
     
     # Box start coordinates (centered in 64x32)
     X_BOX_START = (rnd_width - RND_BOX_WIDTH) // 2 # (64 - 20) / 2 = 22
-    Y_BOX_START = (rnd_height - RND_BOX_HEIGHT) // 2 # (32 - 29) / 2 = 1 (or 2, we take 1 for the center)
+    Y_BOX_START = (rnd_height - RND_BOX_HEIGHT) // 2 # (32 - 30) / 2 = 1 (or 2, we take 1 for the center)
     
     # Text start coordinates (centered in the box)
     X_TEXT_START = X_BOX_START + (RND_BOX_WIDTH - 16) // 2 # 22 + 2 = 24
-    Y_TEXT_START = Y_BOX_START + (RND_BOX_HEIGHT - 21) // 2 # 1 + 4 = 5 (Perfect center)
+    Y_TEXT_START = Y_BOX_START + (RND_BOX_HEIGHT - 24) // 2 # 1 + 4 = 5 (Perfect center)
     
     # Dirty Rect End coordinates (corresponds to box size)
     X_BOX_END = X_BOX_START + RND_BOX_WIDTH - 1 # 22 + 20 - 1 = 41
-    Y_BOX_END = Y_BOX_START + RND_BOX_HEIGHT - 1 # 1 + 29 - 1 = 29
+    Y_BOX_END = Y_BOX_START + RND_BOX_HEIGHT - 1 # 1 + 30 - 1 = 30
     
     # --- 1. Update contrast ---
     if shared_data.current_contrast != shared_data.rnd_last_contrast:
@@ -331,7 +340,7 @@ async def update_rnd_display(shared_data):
 
     # --- 2. Determine gear character ---
     motor_data_valid = shared_data.internal_telemetry_data.get('motorDataValid', False)
-    rnd_char = shared_data.current_rnd_status_char if motor_data_valid else ' '
+    rnd_char = shared_data.current_rnd_status_char if motor_data_valid else '-'
 
     # --- 3. Determine colors and inversion style (Manual Inversion) ---
     invert_state = 1 if rnd_char == 'R' else 0
@@ -370,7 +379,7 @@ async def update_rnd_display(shared_data):
         # Show only the 20x29 box area (Dirty Rect)
         try:
             rnd.show(X_BOX_START, Y_BOX_START, X_BOX_END, Y_BOX_END)
-            shared_data.debug_print("RND: gear updated (dirty rect, 20x29 box)", level=2)
+            # shared_data.debug_print("RND: gear updated (dirty rect, 20x29 box)")
         except OSError as e:
-            shared_data.debug_print(f"ERROR: I2C error in rnd.show(): {e}", level=0)
+            shared_data.debug_print(f"ERROR: I2C error in rnd.show(): {e}")
             rnd = None

@@ -2,16 +2,18 @@
 
 import framebuf
 # Import the generated binary data
-from font_large_data import FONT_LARGE_DATA 
-from font_small_data import FONT_SMALL_DATA 
+# from font_large_data import FONT_LARGE_DATA 
+# from font_small_data import FONT_SMALL_DATA 
 
 class MyFont:
     def __init__(self, size):
         if size == 'large':
+            from font_large_data import FONT_LARGE_DATA
             self.width = 16
             self.height = 21
             self.font_data = FONT_LARGE_DATA
         elif size == 'small':
+            from font_small_data import FONT_SMALL_DATA
             self.width = 12
             self.height = 16 # 16px height = 2 pages
             self.font_data = FONT_SMALL_DATA 

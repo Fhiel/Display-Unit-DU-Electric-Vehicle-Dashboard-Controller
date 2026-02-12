@@ -6,7 +6,7 @@ from machine import Pin, PWM
 import utime
 
 # --- Configuration ---
-RPM_PIN = 15
+RPM_PIN = 27
 PWM_FREQ = 100  # Hz
 MIN_RPM = 0
 MAX_RPM = 8000
@@ -20,7 +20,7 @@ def init(debug_print):
     pwm = PWM(Pin(RPM_PIN))
     pwm.freq(PWM_FREQ)
     pwm.duty_u16(0)
-    debug_print("RPM PWM output initialized on GPIO 15.")
+    debug_print("RPM PWM output initialized on GPIO 27.")
 
 def set_rpm_output(rpm, debug_func=None):
     """

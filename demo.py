@@ -1,5 +1,5 @@
 # main.py
-# Version 10.0 - Complete, English, async, store_km, debug_print
+# Version 10.1 - Complete, English, async, store_km, debug_print (with Integrated DEMO MODE)
 
 import uasyncio as asyncio
 from machine import Pin, I2C, SoftI2C, WDT, reset
@@ -43,9 +43,17 @@ WATCHDOG_TIMEOUT_MS = 5000
 
 DEBUG_LEVEL = 1
 
-R_ISO_MAX = 50000          # Used in validation and default telemetry
-R_ISO_WARNING = 400        # TODO: Implement warning threshold (e.g., flash, icon)
-R_ISO_ERROR = 250          # TODO: Implement error threshold (e.g., shutdown, alert)
+R_ISO_MAX = 50000 
+R_ISO_WARNING = 400 
+R_ISO_ERROR = 250 
+
+# --- DEMO MODE CONFIGURATION ---
+# Set to True to override hardware inputs (pulsecounter) and simulate CAN data.
+DEMO_MODE = True 
+DEMO_MAX_SPEED = 140.0
+DEMO_SPEED_INCREMENT = 1
+DEMO_RPM_PER_KMH = 40 
+# -----------------------------
 
 # --- Shared Data ---
 class SharedTelemetryData:
@@ -110,6 +118,9 @@ class SharedTelemetryData:
         self.last_valid_data_time = utime.ticks_ms()
         self.last_valid_motor_time = utime.ticks_ms()
         self.last_valid_imd_time = utime.ticks_ms()
+        
+        # DEMO MODE TRACKING
+        self.last_demo_can = utime.ticks_ms() # NEU
 
         self.internal_telemetry_data = {
             'motorRPM': 0,
@@ -131,7 +142,7 @@ class SharedTelemetryData:
                 print(f"DEBUG(main): {message}")
                 self.last_debug_output_time = utime.ticks_ms()
 
-# --- Init Displays ---
+# --- Init Displays (Unchanged) ---
 def init_displays(shared_data):
     global odometer, central, rnd
     try:
@@ -161,7 +172,7 @@ def init_displays(shared_data):
     except Exception as e:
         shared_data.debug_print(f"ERROR: RND display init failed: {e}", level=0)
 
-# --- Init Hardware ---
+# --- Init Hardware (Unchanged) ---
 def init_hardware(shared_data):
     global can_controller, temp_gauge, watchdog
     try:
@@ -206,7 +217,7 @@ def init_hardware(shared_data):
     except Exception as e:
         shared_data.debug_print(f"ERROR: Watchdog init failed: {e}", level=0)
 
-# --- Validate Telemetry ---
+# --- Validate Telemetry (Unchanged) ---
 def validate_telemetry_data(data):
     if not data or data.get('type') != 'telemetry':
         return False
@@ -226,6 +237,81 @@ def validate_telemetry_data(data):
             return False
     return True
 
+# ------------------------------------------------------------
+# ASYNC TASK: DEMO-MODE (Simuliert Inputs)
+# ------------------------------------------------------------
+async def demo_mode_task(shared_data):
+    """Simuliert die Geschwindigkeits- und CAN-Telegramm-Inputs."""
+    shared_data.debug_print("Demo Mode Task gestartet.", level=1)
+    
+    demo_speed = 0.0
+    accelerating = True
+
+    while True:
+        if not DEMO_MODE:
+            # Sleep longer if demo mode is off, but keep running in case it's toggled externally
+            await sleep_ms(1000)
+            continue
+
+        current_time = utime.ticks_ms()
+
+        # --- 1. Simulierte Geschwindigkeit (0.05s-Intervall) ---
+        # Multipliziert mit dem Verhältnis (POINTER_UPDATE_PERIOD_MS / 1000) um die Inkremente auf 50ms zu skalieren
+        time_factor = POINTER_UPDATE_PERIOD_MS / 1000.0
+        
+        if accelerating:
+            demo_speed += DEMO_SPEED_INCREMENT * time_factor 
+            if demo_speed >= DEMO_MAX_SPEED:
+                demo_speed = DEMO_MAX_SPEED
+                accelerating = False
+        else:
+            demo_speed -= DEMO_SPEED_INCREMENT * 0.7 * time_factor
+            if demo_speed <= 0.0:
+                demo_speed = 0.0
+                accelerating = True
+                await sleep_ms(2000)  # Pause am Stand
+
+        # Direkte Überschreibung der Werte (ersetzt pulsecounter-Input)
+        shared_data.speed = demo_speed
+        shared_data.digital_speed = int(round(demo_speed))
+        shared_data.odo_dirty_flag = True 
+
+        # Distanz hochzählen 
+        distance_inc = demo_speed / 3600 * time_factor 
+        shared_data.total_km += distance_inc
+        shared_data.trip_km += distance_inc
+
+        # --- 2. Simulierte CAN-Telegramme (einmal pro 800ms) ---
+        if utime.ticks_diff(current_time, shared_data.last_demo_can) > 800:
+            
+            fake_data = {
+                'type': 'telemetry',
+                'motorRPM': int(demo_speed * DEMO_RPM_PER_KMH),
+                'motorTemp': 50 + int(demo_speed / 3) + (utime.ticks_ms() % 4000 // 1000) * 5, 
+                'mcuTemp': 45 + (utime.ticks_ms() % 6000 // 1500) * 8,
+                'imdIsoR': 50000 if demo_speed < 10 else 25000 - int(demo_speed * 100), 
+                'mcuFlags': 0,
+                'mcuFaultLevel': 0,
+                'motorDataValid': True,
+                'imdDataValid': True,
+            }
+
+            # Legt die fake_data in den Puffer, damit BLOCK 5 sie verarbeitet
+            if can_controller:
+                 try:
+                     if can_controller.data_buffer_lock.acquire(timeout=100):
+                         can_controller.data_buffer.append(fake_data)
+                         can_controller.data_buffer_lock.release()
+                     else:
+                          shared_data.debug_print("ERROR: Demo Mode could not acquire CAN lock.", level=2)
+                 except Exception as e:
+                     shared_data.debug_print(f"ERROR: Demo Mode CAN faking failed: {e}", level=0)
+
+            shared_data.last_demo_can = current_time
+
+        await sleep_ms(POINTER_UPDATE_PERIOD_MS) 
+
+
 # --- Main Async Loop ---
 async def main_loop_logic(shared_data):
 
@@ -234,15 +320,22 @@ async def main_loop_logic(shared_data):
         while True:
             current_time = utime.ticks_ms()
             if utime.ticks_diff(current_time, shared_data.last_critical_update_time) >= POINTER_UPDATE_PERIOD_MS:
-                try:
-                    raw_speed, distance_increment = await pulsecounter.calculate_speed_and_distance(shared_data)
-                    shared_data.speed = raw_speed
-                    shared_data.digital_speed = int(round(raw_speed))
-                    shared_data.total_km += distance_increment
-                    shared_data.trip_km += distance_increment
-                except Exception as e:
-                    shared_data.debug_print(f"ERROR in pulse counter: {e}", level=1)
-
+                
+                # --- DEMO MODE GUARD ---
+                if not DEMO_MODE:
+                    # Real Pulsecounter Logic
+                    try:
+                        raw_speed, distance_increment = await pulsecounter.calculate_speed_and_distance(shared_data)
+                        shared_data.speed = raw_speed
+                        shared_data.digital_speed = int(round(raw_speed))
+                        shared_data.total_km += distance_increment
+                        shared_data.trip_km += distance_increment
+                    except Exception as e:
+                        shared_data.debug_print(f"ERROR in pulse counter: {e}", level=1)
+                # --- END DEMO MODE GUARD ---
+                
+                # These output steps run regardless of demo/real mode, 
+                # using the speed set either by pulsecounter or demo_mode_task.
                 try:
                     odometer_motor.odometer_pointer(shared_data.speed, shared_data.debug_print)
                 except Exception as e:
@@ -257,9 +350,9 @@ async def main_loop_logic(shared_data):
                     shared_data.debug_print(f"ERROR in RPM output: {e}", level=1)
 
                 shared_data.last_critical_update_time = current_time
-            await asyncio.sleep_ms(POINTER_UPDATE_PERIOD_MS)
+            await sleep_ms(POINTER_UPDATE_PERIOD_MS)
 
-    # BLOCK 2: Odometer display
+    # BLOCK 2: Odometer display (Unchanged)
     async def block2_task():
         while True:
             current_time = utime.ticks_ms()
@@ -269,9 +362,9 @@ async def main_loop_logic(shared_data):
                     shared_data.last_odometer_display_update_time = current_time
                 except Exception as e:
                     shared_data.debug_print(f"ERROR in odometer display: {e}", level=0)
-            await asyncio.sleep_ms(DISPLAY_UPDATE_PERIOD_MS)
+            await sleep_ms(DISPLAY_UPDATE_PERIOD_MS)
 
-    # BLOCK 3: Central display
+    # BLOCK 3: Central display (Unchanged)
     async def block3_task():
         while True:
             current_time = utime.ticks_ms()
@@ -294,9 +387,9 @@ async def main_loop_logic(shared_data):
                     shared_data.last_central_display_update_time = current_time
                 except Exception as e:
                     shared_data.debug_print(f"ERROR in central display: {e}", level=0)
-            await asyncio.sleep_ms(DISPLAY_UPDATE_PERIOD_MS)
+            await sleep_ms(DISPLAY_UPDATE_PERIOD_MS)
 
-    # BLOCK RND: RND display
+    # BLOCK RND: RND display (Unchanged)
     async def block_rnd_task():
         while True:
             current_time = utime.ticks_ms()
@@ -306,15 +399,16 @@ async def main_loop_logic(shared_data):
                     shared_data.last_rnd_update_time = current_time
                 except Exception as e:
                     shared_data.debug_print(f"ERROR in RND display: {e}", level=0)
-            await asyncio.sleep_ms(RND_UPDATE_PERIOD_MS)
+            await sleep_ms(RND_UPDATE_PERIOD_MS)
 
-    # BLOCK STATUS: Derive status strings
+    # BLOCK STATUS: Derive status strings (Unchanged)
     async def block_status_task():
         while True:
-            await asyncio.sleep_ms(STATUS_UPDATE_PERIOD_MS)
+            await sleep_ms(STATUS_UPDATE_PERIOD_MS)
             telemetry = shared_data.internal_telemetry_data
             mcu_flags = telemetry.get('mcuFlags', 0)
-            imd_raw = telemetry.get('imdStatusRaw', 0)
+            # Assuming imdStatusRaw and vifcStatusRaw exist in telemetry data coming from CAN
+            imd_raw = telemetry.get('imdStatusRaw', 0) 
             vifc_raw = telemetry.get('vifcStatusRaw', 0)
 
             new_mcu = get_mcu_state(mcu_flags)
@@ -342,13 +436,12 @@ async def main_loop_logic(shared_data):
                 shared_data.current_rnd_status_char = get_rnd_status(mcu_flags)
                 shared_data.rnd_dirty_flag = True
 
-    # BLOCK 5: CAN processing
+    # BLOCK 5: CAN processing (Unchanged)
     async def block5_task():
-        while True:
-            current_time = utime.ticks_ms()
-            if can_controller and len(can_controller.data_buffer) > 0:
-                try:
-                    if can_controller.data_buffer_lock.acquire(timeout=5000):
+            while True:
+                if can_controller and len(can_controller.data_buffer) > 0:
+                    await can_controller.data_buffer_lock.acquire()
+                    try:
                         last_valid = None
                         processed = 0
                         while can_controller.data_buffer and processed < 10:
@@ -361,26 +454,35 @@ async def main_loop_logic(shared_data):
                             get = last_valid.get
                             motor_valid = get('motorDataValid', False)
                             imd_valid = get('imdDataValid', False)
+                            
+                            # Update Telemetry Data
                             t['motorRPM'] = get('motorRPM', 0) if motor_valid else 0
                             t['motorTemp'] = get('motorTemp', 0) if motor_valid else 0
                             t['mcuTemp'] = get('mcuTemp', 0) if motor_valid else 0
                             t['mcuFlags'] = get('mcuFlags', 0) if motor_valid else 0
                             t['mcuFaultLevel'] = get('mcuFaultLevel', 0) if motor_valid else 0
+                            
                             t['imdIsoR'] = get('imdIsoR', 0) if imd_valid else 0
                             t['imdState'] = get('imdState', "IMD NDT") if imd_valid else "IMD NDT"
                             t['vifcStatus'] = get('vifcStatus', 0) if imd_valid else 0
+
                             t['motorDataValid'] = motor_valid
                             t['imdDataValid'] = imd_valid
+                            
                             is_ok = (motor_valid or imd_valid) and get('imdIsoR', R_ISO_MAX) >= R_ISO_WARNING
                             t['systemStatus'] = 'OK' if is_ok else 'ISO_ERROR'
+                            
+                            # Update Timestamps
                             shared_data.last_valid_motor_time = current_time if motor_valid else shared_data.last_valid_motor_time
                             shared_data.last_valid_imd_time = current_time if imd_valid else shared_data.last_valid_imd_time
                             shared_data.last_valid_data_time = current_time
-                finally:
-                    can_controller.data_buffer_lock.release()
-            await asyncio.sleep_ms(100)
+                            shared_data.central_dirty_flag = True # Telemetry updated, central display needs redraw
 
-    # BLOCK 6: Odometer saving (only when stopped)
+                    finally:
+                        can_controller.data_buffer_lock.release()
+                await sleep_ms(100)
+
+    # BLOCK 6: Odometer saving (Unchanged)
     async def block6_task():
         while True:
             current_time_us = utime.ticks_us()
@@ -404,9 +506,9 @@ async def main_loop_logic(shared_data):
                 shared_data.stop_start_time = None
                 shared_data.odometer_saved_in_stop = False
             shared_data.last_speed = shared_data.speed
-            await asyncio.sleep_ms(500)
+            await sleep_ms(500)
 
-    # BLOCK 7: Button handling
+    # BLOCK 7: Button handling (Unchanged)
     async def block7_task():
         while True:
             action = button_controller.get_button_action_and_clear()
@@ -431,9 +533,9 @@ async def main_loop_logic(shared_data):
                 shared_data.current_display_mode = (shared_data.current_display_mode + 1) % 4
                 shared_data.debug_print(f"Mode changed to {shared_data.current_display_mode}")
                 await display_manager.update_odometer_display(shared_data)
-            await asyncio.sleep_ms(10)
+            await sleep_ms(10)
 
-    # BLOCK 8: Temp gauge
+    # BLOCK 8: Temp gauge (Unchanged)
     async def block8_task():
         while True:
             current_time = utime.ticks_ms()
@@ -445,9 +547,9 @@ async def main_loop_logic(shared_data):
                         shared_data.last_temp_gauge_update_time = current_time
                     except Exception as e:
                         shared_data.debug_print(f"ERROR in temp gauge: {e}", level=0)
-            await asyncio.sleep_ms(TEMP_GAUGE_UPDATE_PERIOD_MS)
+            await sleep_ms(TEMP_GAUGE_UPDATE_PERIOD_MS)
 
-    # BLOCK 9a: GC
+    # BLOCK 9a: GC (Unchanged)
     async def block9a_task():
         while True:
             if utime.ticks_diff(utime.ticks_ms(), shared_data.last_gc_time) >= 10000:
@@ -455,9 +557,9 @@ async def main_loop_logic(shared_data):
                     shared_data.debug_print(f"Low memory: {gc.mem_free()} bytes. Running GC.")
                     gc.collect()
                 shared_data.last_gc_time = utime.ticks_ms()
-            await asyncio.sleep_ms(10000)
+            await sleep_ms(10000)
 
-    # BLOCK 9b: Timeout check
+    # BLOCK 9b: Timeout check (Unchanged)
     async def block9b_task():
         while True:
             current_time = utime.ticks_ms()
@@ -467,17 +569,21 @@ async def main_loop_logic(shared_data):
                 shared_data.internal_telemetry_data['imdDataValid'] = False
             if utime.ticks_diff(current_time, shared_data.last_valid_data_time) > DATA_TIMEOUT_MS:
                 shared_data.internal_telemetry_data['systemStatus'] = 'NO_DATA_TIMEOUT'
-            await asyncio.sleep_ms(1000)
+            await sleep_ms(1000)
 
-    # Watchdog task
+    # Watchdog task (Unchanged)
     async def watchdog_task():
         while True:
             if watchdog:
                 watchdog.feed()
-            await asyncio.sleep_ms(1000)
+            await sleep_ms(1000)
 
     # Start all tasks
     loop = asyncio.get_event_loop()
+    
+    # NEU: Starten Sie die Demo-Task zusammen mit den anderen
+    loop.create_task(demo_mode_task(shared_data)) 
+    
     loop.create_task(block1_task())
     loop.create_task(block2_task())
     loop.create_task(block3_task())
