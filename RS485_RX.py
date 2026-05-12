@@ -1,229 +1,128 @@
-# RS485_RX.py
-# Clean, stable, demo-ready version – 10.12.2025
-# Works flawlessly on RP2040 with MicroPython + uasyncio
+# RS485_RX.py v0.2 – 12.02.2026
 
 import uasyncio as asyncio
 from machine import UART, Pin
 import utime
-from collections import deque
-import urandom
+import struct
 
-# Import status translation functions – required for both real and demo mode
-from status_codes import get_imd_state, get_vifc_state, get_rnd_status
+# --- Configuration ---
+RS485_BAUDRATE = 115200
+PACKET_LENGTH  = 18  # New 18-byte format
+START_BYTE     = 0xAA
+END_BYTE       = 0x55
 
-print("RS485_RX.py loaded clean demo-ready version")
+# Ready-to-use Display Lists (Indices match the IDs from ESP32)
+MCU_STATES = ["MCU OK", "MCU BLCK", "MCU STOP", "MCU LIMT", "MCU WARN"]
+IMD_STATES = ["IMD OK", "IMD WARN", "IMD ERR", "IMD TEST", "IMD CAL", "ISO ERR"]
+VIFC_STATES = ["SYS OK", "SYS ERR", "SYS STALE", "SYS TST ERR", "SYS ON"]
 
-# ------------------------------------------------------------------
-# Constants
-# ------------------------------------------------------------------
-PACKET_LENGTH     = 17
-START_BYTE        = 0xAA
-END_BYTE          = 0x55
-RS485_BAUDRATE    = 115200
-UART_READ_TIMEOUT_MS = 10
-DATA_BUFFER_MAX_SIZE = 15          # slightly larger is safer in demo mode
-
-# RPM simulation: how many motor RPM per 1 km/h (tune to your vehicle)
-DEMO_RPM_PER_KMH = 60
 
 # ------------------------------------------------------------------
 def calculate_checksum(data):
-    """ XOR checksum over payload (bytes 1-14 of the packet)"""
+    """ XOR checksum over payload (bytes 1-15 of the packet)"""
     checksum = 0
     for b in data:
         checksum ^= b
     return checksum
 
-
 # ------------------------------------------------------------------
 class CanBusController:
     """
-    Handles RS485/UART telemetry reception.
-    In DEMO_MODE it generates realistic telemetry instead of reading hardware.
+    Handles optimized RS485 telemetry reception from ESP32 VCU.
+    Uses binary unpacking for maximum performance on RP2040.
     """
     def __init__(self, shared_data):
         self.shared_data = shared_data
-        self.demo_mode   = False
-        self.demo_state  = {'last_rpm': 0, 'rnd_phase': 0}
+        self.rs485_error_count = 0
+        
+        # Struct Format: < (Little Endian)
+        # H (RPM), c (RND), b (MotT), b (McuT), B (McuID), B (ImdID), B (VifcID), H (IsoR), B (Fault), B (Valid), 3s (Res)
+        self.struct_format = "<Hcb b BBB H B B 3s"
 
-        # deque is atomic in MicroPython → no lock needed
-        self.data_buffer = deque(maxlen=DATA_BUFFER_MAX_SIZE)
-
-        self.rs485_error_count    = 0
-        self.last_data_receive_time = 0
-
-        # Initialise UART only when not in demo mode
-        if not self.demo_mode:
-            try:
-                self.uart = UART(
-                    0,
-                    baudrate=RS485_BAUDRATE,
-                    tx=Pin(0),
-                    rx=Pin(1),
-                    bits=8,
-                    parity=None,
-                    stop=1,
-                    timeout=UART_READ_TIMEOUT_MS
-                )
-                shared_data.debug_print("RS485 UART initialized (GPIO0 TX, GPIO1 RX)", level=1)
-            except Exception as e:
-                self.uart = None
-                shared_data.debug_print(f"UART init failed: {e}", level=0)
-        else:
-            self.uart = None
-
-    # ------------------------------------------------------------------
-    def set_demo_mode(self, enabled: bool):
-        """Enable/disable demo mode (called from app.py)"""
-        self.demo_mode = enabled
-        if enabled:
-            self.shared_data.debug_print("Demo Mode ACTIVATED - simulating telemetry", level=1)
-        else:
-            self.shared_data.debug_print("Demo Mode DEACTIVATED - using real UART", level=1)
-
-    # ------------------------------------------------------------------
-    def _create_demo_telemetry(self):
-        """Generate realistic telemetry dict - called only in demo mode"""
-        speed = self.shared_data.speed
-
-        # ---- RPM with smoothing ------------------------------------------------
-        target_rpm = int(abs(speed) * DEMO_RPM_PER_KMH)
-        smooth_rpm = int(self.demo_state['last_rpm'] * 0.8 + target_rpm * 0.2)
-        self.demo_state['last_rpm'] = smooth_rpm
-
-        # ---- Simple RND simulation (N / D / R) ----------------------------------
-        if speed < 0.5:
-            rnd_mode = 0          # N
-        elif speed < 4.0:
-            rnd_mode = 1          # R (slow reverse)
-        else:
-            rnd_mode = 2          # D (drive)
-
-        mcu_flags = rnd_mode << 2          # bits 2+3 → RND status
-
-        # ---- Slightly fluctuating temperatures & isolation resistance ------------
-        motor_temp = 28 + (utime.ticks_ms() // 2000 % 12)      # 28–39 °C
-        mcu_temp   = 34 + (utime.ticks_ms() // 3000 % 8)       # 34–41 °C
-        imd_iso_r  = 19500 + (utime.ticks_ms() % 3000)         # 19.5–22.5 MΩ
-
-        return {
-            'type'           : 'telemetry',
-            'motorRPM'       : smooth_rpm,
-            'motorTemp'      : motor_temp,
-            'mcuTemp'       : mcu_temp,
-            'mcuFlags'       : mcu_flags,
-            'mcuFaultLevel'  : 0,
-            'imdIsoR'       : imd_iso_r,
-            'imdState'       : "IMD OK",
-            'vifcStatus'     : 0x0000,
-            'motorDataValid' : True,
-            'imdDataValid'   : True,
-            'selfTestFailed' : False
-        }
-
-    # ------------------------------------------------------------------
-    def _parse_packet(self, packet: bytearray):
-        """Convert raw 17-byte packet → telemetry dict (real UART mode)"""
         try:
-            motor_rpm   = (packet[1] << 8) | packet[2]
-            motor_temp  = int.from_bytes(packet[3:4],  'big', signed=True)
-            mcu_temp    = int.from_bytes(packet[4:5],  'big', signed=True)
-            mcu_flags   = (packet[5] << 8) | packet[6]
-            mcu_fault   = packet[7]
-            imd_iso_r   = (packet[8] << 8) | packet[9]
-            imd_status  = (packet[10] << 8) | packet[11]
-            vifc_status = (packet[12] << 8) | packet[13]
-            valid_byte  = packet[14]
-
-            return {
-                'type'           : 'telemetry',
-                'motorRPM'         : motor_rpm,
-                'motorTemp'      : motor_temp,
-                'mcuTemp'       : mcu_temp,
-                'mcuFlags'       : mcu_flags,
-                'mcuFaultLevel'  : mcu_fault,
-                'imdIsoR'       : imd_iso_r,
-                'imdState'       : get_imd_state(imd_status),
-                'vifcStatus'     : get_vifc_state(vifc_status),
-                'motorDataValid' : bool(valid_byte & 0x02),
-                'imdDataValid'   : bool(valid_byte & 0x01),
-                'selfTestFailed' : bool(valid_byte & 0x80)
-            }
+            self.uart = UART(
+                0, 
+                baudrate=RS485_BAUDRATE, 
+                tx=Pin(0), 
+                rx=Pin(1), 
+                timeout=10
+            )
+            shared_data.debug_print("RS485 RX: Optimized binary driver ready", level=1)
         except Exception as e:
-            self.shared_data.debug_print(f"Parse error: {e}", level=0)
-            return None
+            self.uart = None
+            shared_data.debug_print(f"UART init failed: {e}", level=0)
 
-    # ------------------------------------------------------------------
     async def receiver_task(self):
-        """Main loop - runs forever. Handles both real UART and demo mode."""
+        """Main loop - parses 18-byte binary packets using struct.unpack"""
         buffer = bytearray()
+        shared_data = self.shared_data
 
         while True:
-            if self.demo_mode:
-                # --------------------------------------------------------------
-                # DEMO MODE – inject parsed dict directly (safe & clean)
-                # --------------------------------------------------------------
-                telemetry = self._create_demo_telemetry()
-                self.data_buffer.append(telemetry)
-                self.last_data_receive_time = utime.ticks_ms()
+            if self.uart and self.uart.any():
+                data = self.uart.read()
+                if data:
+                    buffer.extend(data)
 
-                await asyncio.sleep_ms(50)        # ~20 Hz, matches real telemetry rate
-                continue                          # skip UART parsing below
-
-            else:
-                # --------------------------------------------------------------
-                # REAL UART MODE
-                # --------------------------------------------------------------
-                if self.uart and self.uart.any():
-                    data = self.uart.read()
-                    if data:
-                        buffer.extend(data)
-
-                await asyncio.sleep_ms(1)             # yield to other tasks
-
-            # ------------------------------------------------------------------
-            # Common packet processing (only executed in real mode)
-            # ------------------------------------------------------------------
-            try:
-                while len(buffer) >= PACKET_LENGTH and buffer[0] == START_BYTE:
-                    packet = buffer[:PACKET_LENGTH]
-
-                    if packet[-1] != END_BYTE:
-                        buffer = buffer[1:]
-                        continue
-
-                    expected_cs = calculate_checksum(packet[1:15])
-                    if packet[15] != expected_cs:
-                        self.shared_data.debug_print("Checksum error", level=2)
-                        buffer = buffer[1:]
-                        continue
-
-                    parsed = self._parse_packet(packet)
-                    if parsed:
-                        self.data_buffer.append(parsed)
-                        self.last_data_receive_time = utime.ticks_ms()
-
-                    buffer = buffer[PACKET_LENGTH:]
-
-                # Resynchronise on garbage
-                if buffer and buffer[0] != START_BYTE:
-                    try:
-                        idx = buffer.index(START_BYTE)
-                        buffer = buffer[idx:]
-                    except ValueError:
+            # Process buffer if enough data for a full packet is present
+            while len(buffer) >= PACKET_LENGTH:
+                # 1. Sync: Look for START_BYTE
+                if buffer[0] != START_BYTE:
+                    idx = buffer.find(START_BYTE)
+                    if idx == -1:
                         buffer.clear()
+                        break
+                    else:
+                        del buffer[:idx]
+                        continue
 
-            except Exception as e:
-                self.shared_data.debug_print(f"receiver_task exception: {e}", level=0)
-                self.rs485_error_count += 1
-                buffer.clear()
-                await asyncio.sleep_ms(10)
+                # 2. Validation: Check END_BYTE and Checksum
+                if buffer[17] != END_BYTE:
+                    # Packet corrupted or shifted, remove first byte and re-sync
+                    del buffer[0]
+                    continue
 
-    # ------------------------------------------------------------------
-    # Helper methods (optional, used by app.py if needed)
-    # ------------------------------------------------------------------
-    def get_data_buffer(self):
-        return list(self.data_buffer)
+                payload = buffer[1:16] # 15 Bytes of payload (ID to Reserve)
+                received_crc = buffer[16]
+                
+                if calculate_checksum(payload) != received_crc:
+                    shared_data.debug_print("RS485 CRC Error", level=2)
+                    self.rs485_error_count += 1
+                    del buffer[0]
+                    continue
 
-    def clear_data_buffer(self):
-        self.data_buffer.clear()
+                # 3. Parsing: Fast unpacking via struct
+                try:
+                    # data is a tuple matching our struct_format
+                    data = struct.unpack(self.struct_format, payload)
+                    
+                    t = shared_data.internal_telemetry_data
+                    
+                    # Mapping fields to shared_data
+                    t['motorRPM'] = data[0]
+                    shared_data.current_rnd_status_char = data[1].decode('ascii')
+                    t['motorTemp'] = data[2]
+                    t['mcuTemp'] = data[3]
+                    
+                    # Map calculated IDs to display strings (O(1) lookup)
+                    t['mcuState']  = MCU_STATES[data[4]] if data[4] < len(MCU_STATES) else "MCU ERR"
+                    t['imdState']  = IMD_STATES[data[5]] if data[5] < len(IMD_STATES) else "IMD ERR"
+                    t['vifcStatus'] = VIFC_STATES[data[6]] if data[6] < len(VIFC_STATES) else "SYS ERR"
+                    
+                    t['imdIsoR'] = data[7]
+                    t['mcuFaultLevel'] = data[8]
+                    
+                    # Data Validity Bitmask (from ESP32 Byte 11)
+                    valid_mask = data[9]
+                    t['motorDataValid'] = bool(valid_mask & 0x02)
+                    t['imdDataValid']   = bool(valid_mask & 0x01)
+
+                    shared_data.last_valid_data_time = utime.ticks_ms()
+
+                except Exception as e:
+                    shared_data.debug_print(f"RS485 Parse Error: {e}", level=0)
+                
+                # Remove the processed packet from buffer
+                del buffer[:PACKET_LENGTH]
+
+            # Brief yield to other asyncio tasks
+            await asyncio.sleep_ms(2)

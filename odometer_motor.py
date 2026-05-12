@@ -1,121 +1,98 @@
-# odometer_motor.py
-# Fully self-contained, non-blocking stepper driver for analog odometer
-# RP2040 + uasyncio safe – no external motor.py needed!
-# Uses hardware Timer → zero blocking, perfect with async applications
-
 from machine import Pin, Timer
 
-# === Configuration ===
+# === BKA30-R5 Direct Drive Config ===
 MAX_SPEED_KMH = 225
-MAX_STEPS = 480
-STEPS_PER_MOVEMENT = 4
-STEP_DELAY_MS = 4                     # 4 ms → ~250 Hz max (perfect for 28BYJ-48 + ULN2003)
+MAX_STEPS = 600      # To allow for a bit of overdrive beyond 225 km/h (for calibration)
+STEP_DELAY_MS = 2    # Fast stepping for smooth pointer movement (2ms per step = 500 steps/sec max)
 
-# Pin assignment (ULN2003 driver or direct output)
-PIN_NUMBERS = [10, 20, 19, 29] # <-- Liste der Nummern, kein Pin-Objekt!
-PINS = [] # <-- Leere Liste
+PIN_NUMBERS = [10, 20, 19, 29]
+PINS = []
 
-# Full-step sequence (high torque, classic 4-phase)
-FULL_STEP_SEQUENCE = [
-    [1, 1, 0, 0],
-    [0, 1, 1, 0],
-    [0, 0, 1, 1],
-    [1, 0, 0, 1]
+# Half-step sequence for smooth movement (8 steps per full step)
+HALF_STEP_SEQUENCE = [
+    [1, 0, 0, 1], [1, 0, 0, 0], [1, 1, 0, 0], [0, 1, 0, 0],
+    [0, 1, 1, 0], [0, 0, 1, 0], [0, 0, 1, 1], [0, 0, 0, 1]
 ]
 
-# === Global state ===
-_current_step = 0        # Actual motor position (steps)
-_target_step = 0         # Desired position
+_current_step = 0
+_target_step = 0
 _timer = Timer(-1)
 _running = False
 _is_calibrating = False 
 
-# === Private helper functions ===
 def _set_coils(state):
-    """Set the four coil outputs according to sequence"""
-    for pin, value in zip(PINS, state):
-        pin.value(value)
+    """ Writes to pins. Ensure protection diodes are present! """
+    for i in range(4):
+        PINS[i].value(state[i])
 
 def _timer_callback(t):
-    global _current_step, _target_step, _running, _is_calibrating # NEU: _is_calibrating
+    global _current_step, _target_step, _running, _is_calibrating  
 
     if _current_step == _target_step:
         _running = False
         t.deinit()
-        _set_coils([0, 0, 0, 0])
+        # Important: We turn off coils when target is reached to prevent overheating without 
+        # resistors. This also allows the pointer to settle naturally on the needle stop.
+        _set_coils([0, 0, 0, 0]) 
         
-        # NEU: Kalibrierung abschließen
         if _is_calibrating:
             _current_step = 0
+            _target_step = 0
             _is_calibrating = False
         return
 
-    # ... Rest der Logik (inkl. der Richtungskorrektur, die wir zuletzt verwendet haben)
     direction = 1 if (_target_step > _current_step) else -1
     _current_step += direction
-
-    base_idx = _current_step % 4 
-    
-    if direction < 0:
-        seq_idx = (base_idx + 2) % 4 # Richtungs-Korrektur (Phase 180° Shift)
-    else:
-        seq_idx = base_idx
-        
-    _set_coils(FULL_STEP_SEQUENCE[seq_idx])
+    _set_coils(HALF_STEP_SEQUENCE[_current_step % 8])
 
 def _start_timer():
-    """Start the hardware timer if not already running"""
     global _running
     if not _running:
         _running = True
         _timer.init(mode=Timer.PERIODIC, period=STEP_DELAY_MS, callback=_timer_callback)
 
-# === Public API (same as before) ===
-def init(debug_print):
-    """Initialize odometer motor – all pins off at start"""
-    global _current_step, _target_step, _running, PINS
+import machine
 
-    PINS = [Pin(p, Pin.OUT) for p in PIN_NUMBERS]
+def init(debug_print):
+    global PINS, _current_step, _target_step, _running
+    
+    # Address for Pad-Control-Register for GPIO 10, 20, 19, 29
+    # Each GPIO has a register that controls the Drive Strength.
+    GPIO_PAD_BASE = 0x4001c000
+    
+    PINS = []
+    for p in PIN_NUMBERS:
+        pin_obj = Pin(p, Pin.OUT, value=0)
+        PINS.append(pin_obj)
+        
+        # Set Drive Strength to 12mA (Register-Manipulation)
+        # Offset for GPIO n is 4 + n*4
+        reg_addr = GPIO_PAD_BASE + 4 + (p * 4)
+        # Bits 5:4 control the Drive Strength: 00=2mA, 01=4mA, 10=8mA, 11=12mA
+        current_val = machine.mem32[reg_addr]
+        new_val = (current_val & ~(0b11 << 4)) | (0b11 << 4)
+        machine.mem32[reg_addr] = new_val
     
     _current_step = _target_step = 0
     _running = False
     _set_coils([0, 0, 0, 0])
-    debug_print("Odometer motor: standalone non-blocking driver ready (pins 10,20,19,29)")
+    debug_print("BKA30: Drive Strength set to 12mA (Hardware Register tweak).")
 
 def odometer_pointer(speed_kmh, debug_print=None):
-    """Move pointer smoothly – completely non-blocking"""
     global _target_step, _is_calibrating
-
-    if _is_calibrating:
-        if debug_print:
-             debug_print("Odometer update skipped: Calibrating...")
-        return
+    if _is_calibrating: return
 
     speed_kmh = max(0.0, min(speed_kmh, MAX_SPEED_KMH))
     new_target = int((speed_kmh / MAX_SPEED_KMH) * MAX_STEPS)
-    new_target = max(0, min(new_target, MAX_STEPS))
 
     if new_target != _target_step:
-        old = _target_step
         _target_step = new_target
         _start_timer()
 
-        if debug_print and abs(new_target - old) > 8:
-            debug_print(f"Odometer → {speed_kmh:.1f} km/h (target step {new_target})")
-
 def odometer_pointer_zero(debug_print=None):
-    global _target_step, _current_step, _is_calibrating 
-    
-    if _is_calibrating: 
-        return
-    
+    """ Homing: Drive back to zero pin. """
+    global _target_step, _is_calibrating 
+    if _is_calibrating: return
     _is_calibrating = True 
-    
-    _target_step = _current_step - 40
+    _target_step = _current_step - (MAX_STEPS + 60)
     _start_timer()
-    if debug_print:
-        debug_print("Odometer zero calibration: moving to target.")
-
-def get_current_steps():
-    """Optional: read current position (for debugging)"""
-    return _current_step

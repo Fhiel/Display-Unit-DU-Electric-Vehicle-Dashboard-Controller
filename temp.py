@@ -1,52 +1,50 @@
-from machine import Pin, PWM # Oder DAC, je nach Hardware
+# temp_gauge.py
+from machine import Pin, PWM
 import utime
 
-# Globale Konstanten für das Gauge (anpassen!)
+# Configuration
 TEMP_GAUGE_PIN = 26
-TEMP_MIN = 0  # Minimale Temperatur, die der Zeiger anzeigt
-TEMP_MAX = 100 # Maximale Temperatur, die der Zeiger anzeigt
-PWM_FREQUENCY = 50 # Frequenz (Hz) für den Zeiger (oft 50Hz bis 1000Hz)
-PWM_MAX_DUTY = 40000 # Maximale Duty Cycle (für 16-Bit-PWM)
-PWM_MIN_DUTY = 7000
+TEMP_MIN = 40
+TEMP_MAX = 120
+PWM_FREQUENCY = 50 
+
+# Logic for BS170 MOSFET Inverter:
+# PWM 0% (0)      -> MOSFET open  -> 12V at instrument -> Hot/Full scale
+# PWM 100% (65535)-> MOSFET closed -> 0V at instrument  -> Cold/Zero
+PWM_MIN_VALUE = 60000 # Cold (high duty cycle due to inverter)
+PWM_MAX_VALUE = 10000 # Hot (low duty cycle due to inverter)
 
 class TempGauge:
-    def __init__(self, debug_func_from_main):
-        self.debug_print = debug_func_from_main
-        self.pin_number = TEMP_GAUGE_PIN
-        self.gauge_output = None
-        self.min_temp = TEMP_MIN
-        self.max_temp = TEMP_MAX
-        self.init_hardware()
+    def __init__(self, debug_func):
+        self.debug_print = debug_func
+        self.pwm_pin = Pin(TEMP_GAUGE_PIN)
+        self.gauge_output = PWM(self.pwm_pin, freq=PWM_FREQUENCY)
+        self.current_filtered_temp = None
+        self.debug_print("Temp-Gauge (Pin 26) ready.")
 
-    def init_hardware(self):
-        try:
-            # Annahme: Verwendung von PWM, da dies universeller ist.
-            # Wenn Pin 26 ein DAC ist, ersetzen Sie dies durch: self.gauge_output = DAC(Pin(self.pin_number))
-            self.pwm_pin = Pin(self.pin_number)
-            self.gauge_output = PWM(self.pwm_pin, freq=PWM_FREQUENCY)
-            self.debug_print(f"Temperatur-Zeiger (Pin {self.pin_number}) initialisiert (PWM).")
-        except Exception as e:
-            self.debug_print(f"ERROR: Fehler bei der Initialisierung des Temperatur-Zeigers: {e}")
-            self.gauge_output = None
-
-    def update(self, current_temp):
-        if self.gauge_output is None:
-            # Wenn die PWM-Initialisierung fehlgeschlagen ist (self.gauge_output = None),
-            # beenden wir die Funktion sofort.
+    def update(self, temp_c):
+        """
+        Updates the analog gauge based on Celsius input.
+        Maps Celsius range to the physical Fahrenheit scale of the instrument.
+        """
+        if temp_c is None: 
             return
 
-        clamped_temp = max(self.min_temp, min(self.max_temp, current_temp))
-        temp_range = self.max_temp - self.min_temp
+        # Define physical display range of the scale
+        # Mapping Celsius input to Fahrenheit scale points
+        T_MIN_C = 48.8  # corresponds to 120°F (Scale start)
+        T_MAX_C = 126.6 # corresponds to 260°F (Scale end)
         
-        pwm_range = PWM_MAX_DUTY - PWM_MIN_DUTY # Der nutzbare PWM-Bereich
+        # Calibrated PWM values (adjust based on hardware testing)
+        # Note: If 95°C results in full deflection, PWM_HOT should reflect that value.
+        PWM_COLD = 5000  # Needle position at 120°F
+        PWM_HOT = 55000  # Needle position at 260°F (or calibrated max)
 
-        if temp_range <= 0:
-             duty_cycle = PWM_MIN_DUTY # Setze auf Minimum bei Fehler
-        else:
-            # Normierung (0.0 bis 1.0)
-            normalized = (clamped_temp - self.min_temp) / temp_range
-            
-            # Skalierung auf den nutzbaren PWM-Bereich (PWM_MIN_DUTY bis PWM_MAX_DUTY)
-            duty_cycle = int(normalized * pwm_range + PWM_MIN_DUTY) # <--- KORRIGIERTE MAPPING-FORMEL
-
-        self.gauge_output.duty_u16(duty_cycle)
+        # Constrain input to defined range
+        temp = max(T_MIN_C, min(T_MAX_C, temp_c))
+        
+        # Linear mapping calculation
+        norm = (temp - T_MIN_C) / (T_MAX_C - T_MIN_C)
+        duty = int(norm * (PWM_HOT - PWM_COLD) + PWM_COLD)
+        
+        self.gauge_output.duty_u16(duty)
