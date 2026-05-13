@@ -1,50 +1,59 @@
 # temp_gauge.py
 from machine import Pin, PWM
-import utime
 
 # Configuration
 TEMP_GAUGE_PIN = 26
-TEMP_MIN = 40
-TEMP_MAX = 120
 PWM_FREQUENCY = 50 
+TEMP_MIN = 40 
+TEMP_MAX = 170 
 
-# Logic for BS170 MOSFET Inverter:
-# PWM 0% (0)      -> MOSFET open  -> 12V at instrument -> Hot/Full scale
-# PWM 100% (65535)-> MOSFET closed -> 0V at instrument  -> Cold/Zero
-PWM_MIN_VALUE = 60000 # Cold (high duty cycle due to inverter)
-PWM_MAX_VALUE = 10000 # Hot (low duty cycle due to inverter)
+# Physical PWM Calibration (Your tested limits)
+PWM_0_PCT   = 5000   # 120°F Mark
+PWM_100_PCT = 40000  # 260°F Mark
 
 class TempGauge:
     def __init__(self, debug_func):
         self.debug_print = debug_func
         self.pwm_pin = Pin(TEMP_GAUGE_PIN)
         self.gauge_output = PWM(self.pwm_pin, freq=PWM_FREQUENCY)
-        self.current_filtered_temp = None
-        self.debug_print("Temp-Gauge (Pin 26) ready.")
+        self.gauge_output.duty_u16(PWM_0_PCT)
+        
+        # Pre-defining the segments to avoid recalculating constants
+        # (Temp, Percentage)
+        self.points = [
+            (50.0, 0.0),
+            (75.0, 0.5),
+            (135.0, 0.875),
+            (155.0, 1.0)
+        ]
 
-    def update(self, temp_c):
+    def update(self, temp_c, is_valid=True):
         """
-        Updates the analog gauge based on Celsius input.
-        Maps Celsius range to the physical Fahrenheit scale of the instrument.
+        Calculates needle position using segment-based linear mapping.
+        Efficient enough for ESP32 FPU.
         """
-        if temp_c is None: 
+        # 1. Immediate exit for error states
+        if not is_valid or temp_c is None or temp_c >= TEMP_MAX:
+            self.gauge_output.duty_u16(PWM_100_PCT)
             return
 
-        # Define physical display range of the scale
-        # Mapping Celsius input to Fahrenheit scale points
-        T_MIN_C = 48.8  # corresponds to 120°F (Scale start)
-        T_MAX_C = 126.6 # corresponds to 260°F (Scale end)
+        # 2. Determine target percentage based on segments
+        target_pct = 0.0
         
-        # Calibrated PWM values (adjust based on hardware testing)
-        # Note: If 95°C results in full deflection, PWM_HOT should reflect that value.
-        PWM_COLD = 5000  # Needle position at 120°F
-        PWM_HOT = 55000  # Needle position at 260°F (or calibrated max)
+        if temp_c <= self.points[0][0]: # < 50°C
+            target_pct = 0.0
+        elif temp_c >= self.points[3][0]: # > 155°C
+            target_pct = 1.0
+        else:
+            # Find the correct segment and interpolate
+            for i in range(len(self.points) - 1):
+                p1 = self.points[i]
+                p2 = self.points[i+1]
+                if p1[0] <= temp_c <= p2[0]:
+                    # Linear interpolation: y = y1 + (x - x1) * (y2 - y1) / (x2 - x1)
+                    target_pct = p1[1] + (temp_c - p1[0]) * (p2[1] - p1[1]) / (p2[0] - p1[0])
+                    break
 
-        # Constrain input to defined range
-        temp = max(T_MIN_C, min(T_MAX_C, temp_c))
-        
-        # Linear mapping calculation
-        norm = (temp - T_MIN_C) / (T_MAX_C - T_MIN_C)
-        duty = int(norm * (PWM_HOT - PWM_COLD) + PWM_COLD)
-        
+        # 3. Map percentage to calibrated PWM duty cycle
+        duty = int(target_pct * (PWM_100_PCT - PWM_0_PCT) + PWM_0_PCT)
         self.gauge_output.duty_u16(duty)

@@ -51,11 +51,11 @@ def get_imd_state(imd_status: int, is_valid: bool = True) -> str:
     test      = bool(imd_status & (1 << 4))
 
     if iso_error or (warn and (calib or test)):
-        return "ISO ERR"
-    if imd_error:
         return "IMD ERR"
+    if imd_error:
+        return "ISO ERR"
     if warn:
-        return "IMD WARN"
+        return "ISO WARN"
     if test:
         return "IMD TEST"
     if calib:

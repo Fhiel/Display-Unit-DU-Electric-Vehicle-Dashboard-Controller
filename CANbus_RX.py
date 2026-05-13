@@ -10,7 +10,7 @@ from mcp2515 import MCP2515
 
 # Status-Lists for display_manager.py
 MCU_STATES = ["MCU OK", "MCU BLK", "MCU STOP", "MCU LIMT", "MCU WARN"]
-IMD_STATES = ["IMD OK", "IMD WARN", "IMD ERR", "IMD TST", "IMD CAL", "ISO ERR"]
+IMD_STATES = ["IMD OK", "ISO WARN", "ISO ERR", "IMD TST", "IMD CAL", "IMD ERR"]
 VIFC_STATES = ["VIFC OK", "V-LINK !", "V-SELF T", "V-STALE", "V-IDLE"]
 
 
