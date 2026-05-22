@@ -8,12 +8,6 @@ from canio import Message
 from mcp2515 import MCP2515
 
 
-# Status-Lists for display_manager.py
-MCU_STATES = ["MCU OK", "MCU BLK", "MCU STOP", "MCU LIMT", "MCU WARN"]
-IMD_STATES = ["IMD OK", "ISO WARN", "ISO ERR", "IMD TST", "IMD CAL", "IMD ERR"]
-VIFC_STATES = ["VIFC OK", "V-LINK !", "V-SELF T", "V-STALE", "V-IDLE"]
-
-
 class CanBusController:
     def __init__(self, shared_data, spi_bus):
         self.shared_data = shared_data

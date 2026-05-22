@@ -23,6 +23,14 @@ DISPLAY_MODE_TOTAL = 1
 DISPLAY_MODE_TRIP = 2
 DISPLAY_MODE_TEMP = 3
 
+# =========================================================================
+# SYSTEM STATUS MATRICES FOR THE CENTRAL DISPLAY (STRICT 8-CHAR MAX)
+# =========================================================================
+# Aligned with explicit State IDs from the VCU Telemetry Engine
+MCU_STATES  = ["MCU OK", "MCU BLK", "MCU STOP", "MCU LIMT", "MCU WARN"]
+IMD_STATES  = ["IMD OK", "ISO WARN", "ISO ERR", "IMD TST", "IMD CAL", "RDY-GO!"]
+VIFC_STATES = ["VIFC OK", "V-LINK !", "V-SELF T", "V-STALE", "V-IDLE"]
+
 # === ODOMETER DISPLAY ===
 async def update_odometer_display(shared_data):
     global odometer, font_large, font_small 
@@ -85,11 +93,23 @@ async def update_odometer_display(shared_data):
             gc.collect()
         except OSError: pass
 
-# === CENTRAL DISPLAY ===
-async def update_central_display(shared_data):
-    global central, font_small
-    if central is None: return
+# =========================================================================
+# CENTRAL COCKPIT DISPLAY PROCESSING UNIT (STRICT 8-CHAR REAL-TIME OUTPUT)
+# =========================================================================
+# Aligned with explicit state IDs from the primary VCU data bus
+# License: MIT
 
+async def update_central_display(shared_data):
+    """
+    Evaluates real-time powertrain and safety states to drive the central 
+    OLED cockpit cluster display. Handles boot sequences, error rotation, 
+    and operational ready signals.
+    """
+    global central, font_small
+    if central is None:
+        return
+
+    # --- 1. DISPLAY PROFILE & CONTRAST CONFIGURATION ---
     if shared_data.current_contrast != shared_data.central_last_contrast:
         central.contrast(shared_data.current_contrast)
         shared_data.central_last_contrast = shared_data.current_contrast
@@ -99,52 +119,76 @@ async def update_central_display(shared_data):
     telemetry = shared_data.internal_telemetry_data
     data_timestamp = shared_data.last_valid_data_time
     
-    display_text = "BERTONE" # Default
+    # Establish base fallback visual layout state
+    display_text = "BERTONE" 
 
+    # --- 2. LINK INTEGRITY WATCHDOG CHECK ---
     if data_timestamp == 0:
         display_text = "NO VCU"
         shared_data.central_ok_start_time = current_time 
     elif _ticks_diff(current_time, data_timestamp) > 8000:
         display_text = "COM ERR"
     else:
-        # Get status strings for each component using the raw flags and validity from telemetry
-        mcu_s = get_mcu_state(telemetry.get('mcuFlagsRaw'), telemetry.get('motorDataValid', False))
-        imd_s = get_imd_state(telemetry.get('imdStateRaw'), telemetry.get('imdDataValid', False))
-        vifc_s = get_vifc_state(telemetry.get('vifcStatusRaw'), telemetry.get('vifcDataValid', False))
+        # Extract explicit computed State IDs (Frame 0x200 via CAN matrix)
+        mcu_id  = telemetry.get('mcuStateId', 255)
+        imd_id  = telemetry.get('imdStateId', 255)
+        vifc_id = telemetry.get('vifcStateId', 255)
 
+        # Securely decode matching array mappings with strict NDT (No Data) strings
+        mcu_s  = MCU_STATES[mcu_id]   if mcu_id  < len(MCU_STATES)  else "MCU NDT"
+        imd_s  = IMD_STATES[imd_id]   if imd_id  < len(IMD_STATES)  else "IMD NDT"
+        vifc_s = VIFC_STATES[vifc_id] if vifc_id < len(VIFC_STATES) else "VIFC NDT"
+
+        # --- PHASE A: COCKPIT BOOT INITIALIZATION SEQUENCER ---
+        # Displays all three main system steps sequentially right after Ignition ON (Kl. 15)
         if shared_data.central_boot_active:
             boot_steps = [mcu_s, imd_s, vifc_s]
             elapsed = _ticks_diff(current_time, shared_data.central_ok_start_time)
             step_idx = elapsed // 2000
             
             if step_idx < len(boot_steps):
-                # Show the status text (e.g., "MCU OK" or "MCU NDT")
                 display_text = boot_steps[step_idx]
             else:
+                # Boot loop sequence achieved, clear latch and transition to runtime engine
                 shared_data.central_boot_active = False
                 display_text = "BERTONE"
         else:
-            # Evaluate active errors and cycle through them if present, otherwise show "BERTONE"
+            # --- PHASE B: ACTIVE FAULT MONITORING LOOP ---
             active_errors = []
+            
+            # Filter Corridor: Only push strings that contain structural faults.
+            # Excludes standard indicators, uninitialized tags, and ready messages.
             for s in [mcu_s, imd_s, vifc_s]:
-                if "OK" not in s and "WAIT" not in s:
+                if "OK" not in s and "RDY-GO!" not in s and "WAIT" not in s and "NDT" not in s:
                     active_errors.append(s)
 
             if active_errors:
+                # Dynamically cycle active errors every 2000ms for driver tracking
                 idx = (current_time // 2000) % len(active_errors)
                 display_text = active_errors[idx]
             else:
-                display_text = "BERTONE"
+                # --- PHASE C: RUNTIME NOMINAL OPERATION STATE ENGINE ---
+                # Check if the safety system loop flags the positive propulsion launch trigger
+                if imd_s == "RDY-GO!":
+                    display_text = "OK - GO !" 
+                else:
+                    display_text = "BERTONE"
 
+    # --- 3. HARDWARE DEPLOYMENT LAYER (PHYSICAL PORT FLUSH) ---
     if getattr(shared_data, 'last_central_text', "") != display_text or shared_data.central_dirty_flag:
         try:
             central.fill(0)
             font_small.text(display_text, 0, 0, 1, display=central)
             central.show()
+            
+            # Cache layout parameters to prevent redundant redraw tracking cycles
             shared_data.last_central_text = display_text
             shared_data.central_dirty_flag = False
-            gc.collect() # SW-I2C Cleanup
-        except: pass
+            
+            # Regular software I2C memory block garbage collection recovery
+            gc.collect() 
+        except Exception:
+            pass
 
 # === RND DISPLAY ===
 async def update_rnd_display(shared_data):

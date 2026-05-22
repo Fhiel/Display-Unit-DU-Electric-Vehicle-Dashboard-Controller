@@ -11,12 +11,6 @@ PACKET_LENGTH  = 18  # New 18-byte format
 START_BYTE     = 0xAA
 END_BYTE       = 0x55
 
-# Ready-to-use Display Lists (Indices match the IDs from ESP32)
-MCU_STATES = ["MCU OK", "MCU BLCK", "MCU STOP", "MCU LIMT", "MCU WARN"]
-IMD_STATES = ["IMD OK", "IMD WARN", "IMD ERR", "IMD TEST", "IMD CAL", "ISO ERR"]
-VIFC_STATES = ["SYS OK", "SYS ERR", "SYS STALE", "SYS TST ERR", "SYS ON"]
-
-
 # ------------------------------------------------------------------
 def calculate_checksum(data):
     """ XOR checksum over payload (bytes 1-15 of the packet)"""
