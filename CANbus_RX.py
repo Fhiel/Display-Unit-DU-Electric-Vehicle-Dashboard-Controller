@@ -26,22 +26,34 @@ class CanBusController:
             silent=False,
             debug=False
         )
-        #  hard reset of the TX control registers in MCP2515
+        
+        # Hard reset of the TX control registers in MCP2515
         for reg in [0x30, 0x40, 0x50]: # TXB0CTRL, TXB1CTRL, TXB2CTRL
            self.can._set_register(reg, 0)
 
-
+        # =====================================================================
+        # === HARDWARE BIT TIMING OVERRIDE (ACK-Fix) ==========================
+        # =====================================================================
+        # Instead of forcing modes, we write directly to the CNF registers.
+        # If the driver leaves the chip in Config mode before init finishes, 
+        # this will inject the correct 16MHz Automotive Timing (75% Sample Point).
+        try:
+            self.can._set_register(0x2A, 0x00) # CNF1 (BRP=0)
+            self.can._set_register(0x29, 0x90) # CNF2 (PropSeg/Phase1)
+            self.can._set_register(0x28, 0x02) # CNF3 (Phase2)
+        except Exception as e:
+            self.shared_data.debug_print(f"Timing Override failed: {e}", level=0)
+        # =====================================================================
 
         # 1. Set initial safe values
         t = shared_data.internal_telemetry_data
         
-        
-        # 2. Set Raw-values to none, that we can distinguish from "Data came but was 0" vs "No data came at all"
+        # 2. Set Raw-values to none
         t['mcuStateRaw'] = None
         t['imdStateRaw'] = None
         t['vifcStatusRaw'] = None
         
-        # 3. Set Validity Flags to False, so we know when we have received valid data at least once
+        # 3. Set Validity Flags to False
         t['systemStatus'] = 'NDT'
         t['motorDataValid'] = False
         t['imdDataValid'] = False
@@ -50,6 +62,39 @@ class CanBusController:
 
         self.shared_data.debug_print("CAN RX: Initialized - Waiting for Data", level=1)
         self._setup_filters()
+
+        self.shared_data.debug_print("CAN RX: Initialized - Waiting for Data", level=1)
+        self._setup_filters()
+
+        # =====================================================================
+        # === FORCE NORMAL MODE OVERRIDE (The Real ACK-Fix) ===================
+        # =====================================================================
+        # The driver often leaves the MCP2515 in Listen-Only (0x60) or Loopback.
+        # We overwrite the CANCTRL register (0x0F) to force NORMAL OPERATION MODE (0x00).
+        # This reactivates the hardware ACK engine immediately.
+        try:
+            import utime
+            # Read current register state
+            current_ctrl = self.can._read_register(0x0F)
+            # Mask out the mode bits (Bits 7-5) and set them to 0x00 (Normal Mode)
+            # We keep the remaining bits (like clock-out settings) intact
+            new_ctrl = (current_ctrl & 0x1F) | 0x00
+            self.can._set_register(0x0F, new_ctrl)
+            
+            # Short verification check
+            utime.sleep_ms(5)
+            actual_mode = self.can._read_register(0x0E) & 0xE0 # Read CANSTAT mode bits
+            if actual_mode == 0x00:
+                self.shared_data.debug_print("CAN Hardware: Successfully forced to ACTIVE NORMAL MODE", level=1)
+            else:
+                self.shared_data.debug_print(f"CAN Hardware: Mode change rejected (Status: {actual_mode})", level=0)
+        except Exception as e:
+            self.shared_data.debug_print(f"Failed to force Normal Mode: {e}", level=0)
+        # =====================================================================
+
+        actual = self.can._read_register(0x0E)  # CANSTAT
+        mode = (actual >> 5) & 0x07
+        print(f"CANSTAT Mode: {mode:01X} (0=Normal, 1=Sleep, 2=Loopback, 3=Listen-Only, 4-7=Config)")
 
     def _setup_filters(self):
         """Only allow ID 0x100 and 0x200 through the MCP2515 filters."""  
@@ -69,43 +114,73 @@ class CanBusController:
     async def receiver_task(self):
         import gc
         import utime
+
+        print("=== CAN RECEIVER TASK STARTED ===")
+        
+        # Local references
         read_msg = self.can.read_message
         read_reg = self.can._read_register
         set_reg = self.can._set_register
-        set_mode = self.can._set_mode
+        int_pin = self.int_pin
         
-        while True:
-            try: 
-                # 1. check for error flags before trying to read messages. If we have an overflow or 
-                # bus error, we need to reset the MCP2515 to recover.
-                eflg = read_reg(0x2D)
-                if eflg & 0x0B: # Passive, Warning or RX1 Overflow
-                    # delete all flags and briefly switch mode to reset the internal state of the MCP2515.
-                    set_reg(0x2D, 0x00) # EFLG delete   
-                    set_reg(0x2C, 0x00) # CANINTF delete
-                    
-                    # if it gets stuck in a bad state, we can try a hard reset by switching to configuration mode and back to normal mode. 
-                    set_mode(0x80) # Configuration
-                    utime.sleep_us(500)
-                    set_mode(0x00) # Normal
-                    # print("DEBUG: MCP Emergency Reset performed")
+        last_status_print = utime.ticks_ms()
 
-                # 2.  reading messages (as before)
+        # Init Interrupts
+        set_reg(0x2B, 0x03)
+        set_reg(0x2C, 0x00) 
+
+        self.shared_data.debug_print("CAN RX: Interrupt-driven Mode active", level=1)
+
+        while True:
+            try:
+                # ==================== DIAGNOSE (immer alle 800ms) ====================
+                now = utime.ticks_ms()
+                if utime.ticks_diff(now, last_status_print) > 800:
+                    eflg    = read_reg(0x2D)
+                    tec     = read_reg(0x1C)
+                    rec     = read_reg(0x1D)
+                    canctrl = read_reg(0x0F)
+                    canstat = read_reg(0x0E)
+                    
+                    print("[CAN] INT:{}  EFLG:0x{:02X}  TEC:{:3d}  REC:{:3d}  CTRL:0x{:02X}  STAT:0x{:02X}".format(
+                        int_pin.value(), eflg, tec, rec, canctrl, canstat))
+                    
+                    last_status_print = now
+                # =====================================================================
+
+                # 1. Warte auf Interrupt
+                if int_pin.value() == 1:
+                    await asyncio.sleep_ms(1)
+                    continue   # zurück zum Diagnose-Block
+
+                # 2. Nur wenn Interrupt kam → Nachrichten verarbeiten
                 processed_any = False
+                
+                eflg = read_reg(0x2D)
+                if eflg & 0xC0:
+                    set_reg(0x2D, 0x00)
+                
                 while True:
                     msg = read_msg()
-                    if msg is None: break
+                    if msg is None: 
+                        break
+                    
                     if msg.id in (0x100, 0x200):
                         self._process_frame_raw(msg.id, msg.data)
                         processed_any = True
                     msg = None
 
+                set_reg(0x2C, 0x00)
+
                 if processed_any:
                     gc.collect()
 
-                await asyncio.sleep_ms(1)
             except Exception as e:
-                print(f"CAN Task Exception: {e}")
+                print(f"CAN Interrupt Task Exception: {e}")
+                try: 
+                    set_reg(0x2C, 0x00)
+                except:
+                    pass
                 await asyncio.sleep_ms(10)
         
 
@@ -157,7 +232,7 @@ class CanBusController:
             pass # Silence is golden in a high-speed loop
 
 
-    def send_odometer_data(self, total_km, trip_km):
+    """ def send_odometer_data(self, total_km, trip_km):
             import struct
             import utime
             from canio import Message   
@@ -211,4 +286,4 @@ class CanBusController:
                 
             except Exception as e:
                 print(f"CAN TX Exception: {e}")
-                return False
+                return False """
